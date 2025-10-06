@@ -99,7 +99,7 @@ def process_regfile(regfile_path):
     # Merge if live
     if not SIMULATION_MODE:
         try:
-            subprocess.run(["reg", "import", output_file], check=True)
+            subprocess.run(["reg", "import", output_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             print(f"Merged modified REG into live registry: {output_file}")
         except subprocess.CalledProcessError as e:
             print("Failed to merge registry:", e)
@@ -201,11 +201,11 @@ def list_vss_snapshots_before_cutoff():
 # ---------------- REGISTRY HIVE FUNCTIONS ----------------
 
 def reg_load(hive_path, mount_name):
-    subprocess.run(["reg", "load", rf"HKU\{mount_name}", hive_path], check=True)
+    subprocess.run(["reg", "load", rf"HKU\{mount_name}", hive_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
     time.sleep(SLEEP_AFTER_LOAD)
 
 def reg_unload(mount_name):
-    subprocess.run(["reg", "unload", rf"HKU\{mount_name}"], check=True)
+    subprocess.run(["reg", "unload", rf"HKU\{mount_name}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
 def modify_hive_value(hive_mount_name):
     root = winreg.HKEY_USERS
@@ -214,7 +214,7 @@ def modify_hive_value(hive_mount_name):
         with winreg.OpenKey(root, key_path, 0, winreg.KEY_ALL_ACCESS) as key:
             val, vtype = winreg.QueryValueEx(key, OLD_VALUE_NAME)
             if not SIMULATION_MODE:
-                winreg.DeleteValue(key, OLD_VALUE_NAME)
+                #winreg.DeleteValue(key, OLD_VALUE_NAME)
                 winreg.SetValueEx(key, NEW_VALUE_NAME, 0, vtype, val)
             return True
     except FileNotFoundError:
@@ -240,12 +240,39 @@ def export_and_save(hive_mount_name):
             rf"[HKEY_USERS\{hive_mount_name}\{TARGET_REL_PATH}]",
             rf"[HKEY_CURRENT_USER\{TARGET_REL_PATH}]"
         )
-        data_fixed = data_fixed.replace(OLD_VALUE_NAME, NEW_VALUE_NAME)
+        # Duplicate OLD_VALUE_NAME line as NEW_VALUE_NAME
+        import re
+        lines = data_fixed.splitlines()
+        new_lines = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            new_lines.append(line)
+
+            if line.strip().startswith(f"\"{OLD_VALUE_NAME}\"="):
+                # Capture the full block (handles hex multi-line continuation with '\')
+                block_lines = [line]
+                j = i + 1
+                while j < len(lines) and lines[j].strip().endswith("\\"):
+                    block_lines.append(lines[j])
+                    new_lines.append(lines[j])
+                    j += 1
+
+                # Duplicate the entire block, replacing only the value name
+                block_text = "\n".join(block_lines)
+                new_block = block_text.replace(OLD_VALUE_NAME, NEW_VALUE_NAME)
+                new_lines.append(new_block)
+                i = j - 1  # jump forward to the last continuation line
+            i += 1
+
+        data_fixed = "\n".join(new_lines)
+
         with open(OUTPUT_REG_FILE, "w", encoding="utf-16") as f:
             f.write(data_fixed)
+
         print(f"Fixed REG file created: {OUTPUT_REG_FILE}")
         if not SIMULATION_MODE:
-            subprocess.run(["reg", "import", OUTPUT_REG_FILE], check=True)
+            subprocess.run(["reg", "import", OUTPUT_REG_FILE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             print(f"Merged modified key into live registry: {OUTPUT_REG_FILE}")
         return True
     except Exception as e:
